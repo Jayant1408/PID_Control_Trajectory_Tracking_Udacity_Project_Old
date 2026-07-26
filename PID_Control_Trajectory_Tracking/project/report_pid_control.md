@@ -98,12 +98,18 @@ tracks the error at roughly 0.27 times its magnitude, which is the proportional
 gain of 0.30 offset slightly by the accumulated integral term — so for most of
 the run the output is a scaled copy of the error rather than a
 derivative-damped version of it (see the note on update timing below).
-Between iterations 138 and 144 the error plunges to
--1.53 rad: this is where the vehicle collides with road geometry at a sharp
-bend, the trajectory collapses, and tracking is lost. The error then settles at
-about -1.19 rad and stays there for the remainder of the run. Up to iteration
-137 the controller holds a small, well-behaved error, i.e. it is tracking the
-path.
+Between iterations 124 and 137 the error is frozen at 0.0207 rad, unchanged to
+six decimal places. The behaviour planner has halted the car at a junction, so
+neither the vehicle pose nor the closest trajectory point is moving. At
+iteration 134 the planner commands a resume to ~3 m/s, and from iteration 138
+the error plunges to -1.53 rad by iteration 144. The car cannot physically
+rotate 87 degrees in six cycles, so what moves is the *reference*, not the
+vehicle: the closest trajectory point swings almost perpendicular to the car as
+the planned path turns through the junction. The controller answers with an
+output of -0.459, comfortably inside its -0.60 limit, so it never applies full
+steering authority before leaving the road. The error then settles at about
+-1.19 rad and stays there for the remainder of the run. Up to iteration 137 the
+controller holds a small, well-behaved error, i.e. it is tracking the path.
 
 ### A note on the update period
 
@@ -223,11 +229,25 @@ the accumulator would have to reach into the hundreds before it contributed
 enough throttle to close a 1.2 m/s gap, which is far longer than the run lasts.
 This was checked experimentally rather than assumed — see section 5.
 
-The run ends in a collision at a sharp bend where the *provided* motion planner's
-trajectory takes the car into the road boundary; at that point the path
-collapses ("No spirals generated") and tracking cannot recover. This is a
-motion-planner/route limitation rather than a controller defect, and matches the
-"a perfect trajectory is not expected" note in the project requirements.
+The run ends in a collision as the car resumes from a planner-commanded stop at
+a junction and the planned path turns sharply. The trigger is external to the
+control loop: as shown in section 2, the steering reference jumps almost
+perpendicular within a few cycles, which no proportional controller can follow
+smoothly.
+
+The controller is not blameless, however. At the moment of failure it commanded
+-0.459 against an available limit of -0.60, leaving roughly a quarter of its
+steering authority unused — with `Kp = 0.30`, an error of -1.52 rad simply does
+not generate enough command. And because the reference is the *closest*
+trajectory point rather than a look-ahead point, it is at its least
+well-conditioned precisely when the car is slow and the path is turning. A
+pure-pursuit style look-ahead reference and more steering authority would both
+be needed to have a realistic chance at this corner.
+
+After the collision the path collapses ("No spirals generated") and tracking
+cannot recover. A perfect trajectory is not expected for this project and the
+controller tracks the drivable stretch accurately, but the failure should not be
+attributed to the planner alone.
 
 ---
 
@@ -254,8 +274,8 @@ hypothesis is therefore rejected for the speed deficit**, which is caused by the
 small magnitude of `Ki` rather than by the update timing. The vehicle also left
 the road at iteration 137, the same point as the baseline. Making the controller
 substantially more responsive did not change where or why the run fails, which
-supports the conclusion in section 4 that the failure originates in the planned
-route rather than in the controller.
+rules out the update period as the cause and points instead at the steering
+reference and the available steering authority discussed in section 4.
 
 **Cost.** With `Kd` unchanged the actuation became far less smooth, alternating
 between full throttle and heavy braking where the baseline had held a steady

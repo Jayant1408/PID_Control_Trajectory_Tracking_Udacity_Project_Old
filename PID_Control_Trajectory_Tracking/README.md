@@ -171,9 +171,13 @@ and integral terms only act on whole-second boundaries rather than every cycle;
 the report discusses this and its consequences in detail.
 
 Between iterations 138 and 144 the error collapses to -1.53 rad and then settles
-at about -1.19 rad for the rest of the run. This is where the planned trajectory
-takes the car into the road boundary at a sharp bend; the planner then reports
-"No spirals generated" continuously and tracking cannot recover.
+at about -1.19 rad for the rest of the run. The car is resuming from a
+planner-commanded stop at a junction when the path turns sharply, so the
+steering reference — the closest trajectory point — swings almost perpendicular
+within a few cycles. The controller answers with -0.459 against a -0.60 limit,
+so it never reaches its own steering authority. The planner then reports "No
+spirals generated" continuously and tracking cannot recover; section 4 of the
+report works through the evidence.
 
 ### Throttle
 
@@ -194,10 +198,13 @@ for completeness: `project/steer_plot_full.png` and
 
 ## Discussion
 
-The controller tracks the planned trajectory well over the drivable stretch and
-fails where the provided motion planner routes the car into road geometry rather
-than because of a controller defect. A perfect trajectory is not expected for
-this project.
+The controller tracks the planned trajectory accurately over the drivable
+stretch. It fails at a sharp junction turn taken on resume from a stop, where
+the closest-point steering reference swings almost perpendicular and the
+controller does not reach its own steering limit. That combination — reference
+quality and steering authority — rather than the planner alone is what ends the
+run; section 4 of the report sets out the evidence. A perfect trajectory is not
+expected for this project.
 
 One follow-up experiment is also documented there. The starter code derives the
 PID update period from `time()`, whose one-second resolution leaves `delta_t` at

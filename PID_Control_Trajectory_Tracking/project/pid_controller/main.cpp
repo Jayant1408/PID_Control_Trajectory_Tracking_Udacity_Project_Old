@@ -270,7 +270,7 @@ int main ()
   // CASE 3 : Using the PID-controller (proportional-integral-derivative gain):
   // pid_steer.init_controller(1.0, 1.0, 1.0, 1.2, -1.2);
   // Final run (stable reference gains)
-  // Pure-pursuit steering: gains tuned for smooth cross-track tracking. Output
+  // Heading-error steering onto the closest trajectory point. Output
   // limited to +/-0.60 (well within the rubric's [-1.2, 1.2]) to avoid the
   // over-steer/oscillation that larger limits produced.
   pid_steer.init_controller(0.3, 0.0025, 0.17, 0.60, -0.60);
