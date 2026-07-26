@@ -120,9 +120,9 @@ boundary rolling over and the derivative term contributing for a single cycle.
 
 The derivative and integral terms are implemented correctly; they simply only
 act on those one-second boundaries rather than every cycle. Sourcing `delta_t`
-from a higher-resolution clock such as `std::chrono::steady_clock` would let
-both terms act continuously, and would be the first change to make before
-tuning the gains any further.
+from a higher-resolution clock such as `std::chrono::steady_clock` lets both
+terms act continuously. That change was implemented and tested; section 5
+reports what it actually did.
 
 ### Full-run views
 
@@ -188,11 +188,15 @@ tracking accuracy, control effort, and comfort (jerk).
   loops.
 
 ### (d) (Optional) What would you do to improve the controller?
-- **Fix the update period first.** Source `delta_t` from
+- **Fix the update period, then re-tune.** Source `delta_t` from
   `std::chrono::steady_clock` rather than `time()`, so the derivative and
   integral terms act on every cycle instead of only on one-second boundaries
-  (see section 2). The gains need re-tuning afterwards, since the derivative
-  term becomes considerably stronger once it is divided by a realistic period.
+  (see section 2). This was implemented and tested; on its own it made the
+  actuation harsher without improving tracking, so it has to be paired with a
+  substantially smaller `Kd`. Section 5 reports the experiment in full.
+- **Raise `Ki` on the throttle loop.** The measured 1.2 m/s steady-state speed
+  deficit is a textbook integral-authority problem, and section 5 rules out the
+  update timing as its cause.
 - Replace/augment steering with a model-based law (**Stanley** or
   **pure-pursuit** with speed-dependent look-ahead) that anticipates curvature.
 - **Gain scheduling** on speed and path curvature so the tuning stays valid
@@ -214,12 +218,54 @@ It does not, however, reach the planner's target speed of ~3 m/s. The speed
 error settles at about 1.19 m/s, which puts the car at roughly 1.8 m/s; the
 simulator HUD reads 1.81 m/s during the run, confirming this independently. A
 persistent offset of that kind is exactly what the integral term exists to
-remove, and its survival here follows directly from the update-period problem
-described in section 2: the integral accumulator only advances on one-second
-boundaries, so it never builds enough authority to close the gap.
+remove. The cause is the size of `Ki` rather than the update timing: at 0.0006,
+the accumulator would have to reach into the hundreds before it contributed
+enough throttle to close a 1.2 m/s gap, which is far longer than the run lasts.
+This was checked experimentally rather than assumed — see section 5.
 
 The run ends in a collision at a sharp bend where the *provided* motion planner's
 trajectory takes the car into the road boundary; at that point the path
 collapses ("No spirals generated") and tracking cannot recover. This is a
 motion-planner/route limitation rather than a controller defect, and matches the
 "a perfect trajectory is not expected" note in the project requirements.
+
+---
+
+## 5. Experiment: a higher-resolution update period
+
+**Hypothesis.** Section 2 shows that `delta_t` is zero on most cycles, which
+disables the derivative term and freezes the integral accumulator. If that is
+what limits the controller, replacing the clock should improve tracking and
+remove the steady-state speed error.
+
+**Change.** `delta_t` was sourced from `std::chrono::steady_clock` instead of
+`time()` / `difftime()`, giving a true fractional-second period of roughly 0.03 s
+instead of 0 or 1. Gains were left unchanged so the timing was the only variable.
+
+**What changed.** The derivative term became genuinely active. At iteration 140
+the ratio of steering output to steering error rose from 0.30 to 0.64. Throttle
+output reached full saturation at 1.0, where the baseline never exceeded 0.63
+even at its hardest acceleration around iteration 136, and braking reached 0.77
+against a baseline maximum below 0.2.
+
+**What did not change.** The steady-state speed error was 1.17 m/s across
+iterations 100–113, against 1.18 m/s in the baseline — unchanged. **The
+hypothesis is therefore rejected for the speed deficit**, which is caused by the
+small magnitude of `Ki` rather than by the update timing. The vehicle also left
+the road at iteration 137, the same point as the baseline. Making the controller
+substantially more responsive did not change where or why the run fails, which
+supports the conclusion in section 4 that the failure originates in the planned
+route rather than in the controller.
+
+**Cost.** With `Kd` unchanged the actuation became far less smooth, alternating
+between full throttle and heavy braking where the baseline had held a steady
+throttle near 0.26 and had barely touched the brake at all. `Kd = 0.17` was
+tuned while the derivative was effectively inactive, so restoring it scales that term by
+roughly the ratio of the real period to one second. Adopting the change properly
+would require re-tuning `Kd` downwards by about that factor.
+
+**Outcome.** The higher-resolution clock is the correct implementation, but
+untuned it degrades ride quality without improving tracking or preventing the
+collision. It is therefore not part of the submitted build; it is retained on the
+`chrono-timing-fix` branch. The comparison above is drawn from the first 150
+iterations, which both runs cover.

@@ -199,6 +199,14 @@ fails where the provided motion planner routes the car into road geometry rather
 than because of a controller defect. A perfect trajectory is not expected for
 this project.
 
+One follow-up experiment is also documented there. The starter code derives the
+PID update period from `time()`, whose one-second resolution leaves `delta_t` at
+zero on most cycles. Re-deriving it from `std::chrono::steady_clock` was
+implemented and tested on the `chrono-timing-fix` branch: it does activate the
+derivative term, but with the gains unchanged it makes the actuation markedly
+harsher without improving tracking or preventing the collision, so it is not
+part of the submitted build. Section 5 of the report gives the numbers.
+
 The full discussion — the effect of each PID term, how the gains could be tuned
 automatically, the trade-offs of a model-free controller, and what would improve
 it — is in [`project/report_pid_control.md`](project/report_pid_control.md).
