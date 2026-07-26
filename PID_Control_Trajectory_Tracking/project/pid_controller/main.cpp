@@ -251,10 +251,12 @@ int main ()
   file_throttle.open("throttle_pid_data.txt", std::ofstream::out | std::ofstream::trunc);
   file_throttle.close();
 
-  // Timer for computing the PID update period (delta time), as in the starter.
-  time_t prev_timer;
-  time_t timer;
-  time(&prev_timer);
+  // Timer for computing the PID update period (delta time). A steady_clock is
+  // used instead of the starter's time()/difftime(), whose one-second resolution
+  // left delta_t at zero on most cycles and so disabled the derivative term and
+  // froze the integral accumulator between whole-second boundaries.
+  auto prev_timer = std::chrono::steady_clock::now();
+  auto timer = prev_timer;
 
 
   // initialize pid steer
@@ -339,8 +341,8 @@ int main ()
           path_planner(x_points, y_points, v_points, yaw, velocity, goal, is_junction, tl_state, spirals_x, spirals_y, spirals_v, best_spirals);
 
           // Compute the delta time between successive controller updates.
-          time(&timer);
-          new_delta_time = difftime(timer, prev_timer);
+          timer = std::chrono::steady_clock::now();
+          new_delta_time = std::chrono::duration<double>(timer - prev_timer).count();
           prev_timer = timer;
 
 
