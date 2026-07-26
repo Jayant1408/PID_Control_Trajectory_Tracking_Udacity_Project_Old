@@ -10,33 +10,36 @@
 class PID {
 public:
 
-   /**
-   * TODO: Create the PID class
-   **/
     /*
     * Errors
     */
+    double error_p;
+    double error_i;
+    double error_d;
 
     /*
     * Coefficients
     */
+    double k_p;
+    double k_i;
+    double k_d;
 
     /*
     * Output limits
     */
-  
+    double lim_max_output;
+    double lim_min_output;
+
+    /*
+    * Integral clamp bounds, derived from the output limits for anti-windup
+    */
+    double i_error_min;
+    double i_error_max;
+
     /*
     * Delta time
     */
-   double lim_max_output;
-   double lim_min_output;
-   double delta_t;
-   double error_p;
-   double error_i;
-   double error_d;
-   double k_p;
-   double k_i;
-   double k_d;
+    double delta_t;
     /*
     * Constructor
     */

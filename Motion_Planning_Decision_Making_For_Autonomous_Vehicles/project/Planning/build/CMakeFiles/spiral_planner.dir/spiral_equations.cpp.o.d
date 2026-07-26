@@ -1,7 +1,7 @@
 CMakeFiles/spiral_planner.dir/spiral_equations.cpp.o: \
- /home/jayant/udacity_carla/Motion_Planning_Decision_Making_For_Autonomous_Vehicles/project/Planning/spiral_equations.cpp \
+ /home/jayant/udacity_carla_local/Motion_Planning_Decision_Making_For_Autonomous_Vehicles/project/Planning/spiral_equations.cpp \
  /usr/include/stdc-predef.h \
- /home/jayant/udacity_carla/Motion_Planning_Decision_Making_For_Autonomous_Vehicles/project/Planning/spiral_equations.h \
+ /home/jayant/udacity_carla_local/Motion_Planning_Decision_Making_For_Autonomous_Vehicles/project/Planning/spiral_equations.h \
  /usr/include/c++/13/array /usr/include/c++/13/compare \
  /usr/include/c++/13/initializer_list \
  /usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h \

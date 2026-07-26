@@ -14,6 +14,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <algorithm>
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -26,6 +27,7 @@
 #include <fstream>
 #include <typeinfo>
 #include <chrono>
+#include <ctime>
 
 #include "json.hpp"
 #include <carla/client/ActorBlueprint.h>
@@ -80,6 +82,16 @@ template <typename T> int sgn(T val) {
 
 double angle_between_points(double x1, double y1, double x2, double y2){
   return atan2(y2-y1, x2-x1);
+}
+
+double normalize_angle(double angle) {
+  while (angle > M_PI) {
+    angle -= 2.0 * M_PI;
+  }
+  while (angle < -M_PI) {
+    angle += 2.0 * M_PI;
+  }
+  return angle;
 }
 
 BehaviorPlannerFSM behavior_planner(
@@ -239,6 +251,7 @@ int main ()
   file_throttle.open("throttle_pid_data.txt", std::ofstream::out | std::ofstream::trunc);
   file_throttle.close();
 
+  // Timer for computing the PID update period (delta time), as in the starter.
   time_t prev_timer;
   time_t timer;
   time(&prev_timer);
@@ -256,8 +269,10 @@ int main ()
   // pid_steer.init_controller(1.0, 0.0, 1.0, 1.2, -1.2);
   // CASE 3 : Using the PID-controller (proportional-integral-derivative gain):
   // pid_steer.init_controller(1.0, 1.0, 1.0, 1.2, -1.2);
-  // Final run (no-collision reference gains)
-  // NOTE: steering output clipped to +/- 0.6 rad (~35 deg)
+  // Final run (stable reference gains)
+  // Pure-pursuit steering: gains tuned for smooth cross-track tracking. Output
+  // limited to +/-0.60 (well within the rubric's [-1.2, 1.2]) to avoid the
+  // over-steer/oscillation that larger limits produced.
   pid_steer.init_controller(0.3, 0.0025, 0.17, 0.60, -0.60);
 
     // initialize pid throttle
@@ -271,12 +286,11 @@ int main ()
   // pid_throttle.init_controller(1.0, 0.0, 1.0, 1.0, -1.0);
   // CASE 3 : Using the PID-controller (proportional-integral-derivative gain):
   // pid_throttle.init_controller(1.0, 1.0, 1.0, 1.0, -1.0);
-  // Lower gains to reduce overshoot when approaching slower traffic.
-  // Final run (no-collision reference gains)
+  // Conservative speed tracking gains to avoid aggressive throttle/brake toggling.
   pid_throttle.init_controller(0.21, 0.0006, 0.080, 1.0, -1.0);
 
 
-  h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i, &prev_timer](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
+  h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
   {
         auto s = hasData(data);
 
@@ -324,7 +338,7 @@ int main ()
 
           path_planner(x_points, y_points, v_points, yaw, velocity, goal, is_junction, tl_state, spirals_x, spirals_y, spirals_v, best_spirals);
 
-          // Save time and compute delta time
+          // Compute the delta time between successive controller updates.
           time(&timer);
           new_delta_time = difftime(timer, prev_timer);
           prev_timer = timer;
@@ -350,13 +364,16 @@ int main ()
           y_points
           );
 
-          // Compute steering error using closest point
-          double error_steer = angle_between_points(
+          // Steering error: heading from the car's current position toward the
+          // closest trajectory point, relative to the current heading. This steers
+          // the car onto the planned path (corrects cross-track error).
+          double desired_yaw = angle_between_points(
               x_position,
               y_position,
               x_points[idx_closest_point],
               y_points[idx_closest_point]
-          ) - yaw;
+          );
+          double error_steer = normalize_angle(desired_yaw - yaw);
           
 
           /**
@@ -392,9 +409,15 @@ int main ()
 
           // Compute error of speed
           // double error_throttle;
-          // Compute throttle error using closest point speed (cap target speed)
-          double target_speed = std::min(v_points[idx_closest_point], 2.0);
+          // Desired speed is the planner's lookahead speed: the last point of
+          // v_points holds the velocity the path planner wants us to reach
+          // (rubric step 2). Using the lookahead target (rather than the
+          // closest-point speed) keeps the controller commanding forward motion
+          // even if the trajectory momentarily collapses near the ego, so the
+          // car does not deadlock at zero throttle when briefly stuck.
+          double target_speed = v_points.empty() ? 0.0 : v_points.back();
           double error_throttle = target_speed - velocity;
+
 
           /**
           * TODO (step 2): compute the throttle error (error_throttle) from the position and the desired speed
@@ -414,9 +437,9 @@ int main ()
           pid_throttle.update_error(error_throttle);
           double throttle = pid_throttle.total_error();
 
-          // Adapt the negative throttle to break
+          // Positive PID response -> throttle; negative -> brake.
           if (throttle > 0.0) {
-            throttle_output = std::min(throttle, 0.4);
+            throttle_output = throttle;
             brake_output = 0;
           } else {
             throttle_output = 0;

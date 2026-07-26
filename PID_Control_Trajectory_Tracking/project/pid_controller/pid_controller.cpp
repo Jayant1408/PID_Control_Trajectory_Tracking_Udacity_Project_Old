@@ -8,6 +8,7 @@
 #include <vector>
 #include <iostream>
 #include <math.h>
+#include <algorithm>
 
 using namespace std;
 
@@ -28,6 +29,16 @@ void PID::init_controller(double Kpi, double Kii, double Kdi, double output_lim_
   this->error_p = 0.0;
   this->error_i = 0.0;
   this->error_d = 0.0;
+  if (fabs(this->k_i) > 1e-6) {
+    this->i_error_max = this->lim_max_output / this->k_i;
+    this->i_error_min = this->lim_min_output / this->k_i;
+    if (this->i_error_min > this->i_error_max) {
+      std::swap(this->i_error_min, this->i_error_max);
+    }
+  } else {
+    this->i_error_min = -1e6;
+    this->i_error_max = 1e6;
+  }
 }
 
 
@@ -35,9 +46,12 @@ void PID::update_error(double cte) {
    /**
    * TODO: Update PID errors based on cte.
    **/
-   this->error_d = (this->delta_t > 0.0) ? (cte - this->error_p) / this->delta_t : 0.0;
-   this->error_p = cte;  // Set current error after calculating derivative
-   this->error_i += cte * this->delta_t;
+   double prev_error_p = this->error_p;
+   this->error_p = cte;
+   this->error_d = (this->delta_t > 1e-6) ? (this->error_p - prev_error_p) / this->delta_t : 0.0;
+   // Trapezoidal integration and anti-windup clamping.
+   this->error_i += 0.5 * (this->error_p + prev_error_p) * this->delta_t;
+   this->error_i = std::max(this->i_error_min, std::min(this->error_i, this->i_error_max));
  }
 
 double PID::total_error() {
