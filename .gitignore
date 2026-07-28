@@ -1,0 +1,14 @@
+# CMake/make output. Regenerate with: cmake .. && make
+build/
+
+# Windows "downloaded from the internet" metadata, which WSL exposes as real
+# files and git then tracks.
+*:Zone.Identifier
+
+# Python
+__pycache__/
+*.pyc
+
+# Scratch output from controller runs. The plots and the *_pid_data.txt logs
+# used in the report are deliverables and stay tracked.
+*.log
