@@ -250,6 +250,13 @@ int main ()
   fstream file_throttle;
   file_throttle.open("throttle_pid_data.txt", std::ofstream::out | std::ofstream::trunc);
   file_throttle.close();
+  // Diagnostic trace of the steering reference geometry. Not a deliverable;
+  // .log is gitignored.
+  fstream file_debug;
+  file_debug.open("steer_debug.log", std::ofstream::out | std::ofstream::trunc);
+  file_debug << "i n_points idx_closest idx_target dist_closest dist_target "
+                "dist_last yaw desired_yaw error_steer" << endl;
+  file_debug.close();
 
   // Timer for computing the PID update period (delta time), as in the starter.
   time_t prev_timer;
@@ -286,8 +293,11 @@ int main ()
   // pid_throttle.init_controller(1.0, 0.0, 1.0, 1.0, -1.0);
   // CASE 3 : Using the PID-controller (proportional-integral-derivative gain):
   // pid_throttle.init_controller(1.0, 1.0, 1.0, 1.0, -1.0);
-  // Conservative speed tracking gains to avoid aggressive throttle/brake toggling.
-  pid_throttle.init_controller(0.21, 0.0006, 0.080, 1.0, -1.0);
+  // Conservative speed tracking gains to avoid aggressive throttle/brake
+  // toggling. delta_t comes from difftime() on time_t, so it has one-second
+  // resolution and the integral only accumulates on the cycles where the
+  // second rolls over; Ki is sized against that coarse accumulation.
+  pid_throttle.init_controller(0.21, 0.01, 0.080, 1.0, -1.0);
 
 
   h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
@@ -364,16 +374,61 @@ int main ()
           y_points
           );
 
-          // Steering error: heading from the car's current position toward the
-          // closest trajectory point, relative to the current heading. This steers
-          // the car onto the planned path (corrects cross-track error).
-          double desired_yaw = angle_between_points(
-              x_position,
-              y_position,
-              x_points[idx_closest_point],
-              y_points[idx_closest_point]
-          );
-          double error_steer = normalize_angle(desired_yaw - yaw);
+          // Steering error: heading from the car's current position toward a
+          // look-ahead point on the trajectory, relative to the current heading.
+          // The look-ahead reference matters because the closest point can sit at
+          // effectively zero distance from the car, or behind it, where its
+          // bearing is numerically meaningless and can pin steering at the
+          // saturation limit. Walk forward from the closest point until far
+          // enough away, falling back to the last point on short trajectories.
+          const double look_ahead_distance = 5.0;
+          std::size_t idx_target_point = idx_closest_point;
+          for (std::size_t k = idx_closest_point; k < x_points.size(); ++k) {
+            idx_target_point = k;
+            const double dx = x_points[k] - x_position;
+            const double dy = y_points[k] - y_position;
+            if (std::sqrt(dx * dx + dy * dy) >= look_ahead_distance) {
+              break;
+            }
+          }
+
+          // The planner returns no trajectory at all on some cycles ("No spirals
+          // generated"), so the points may be empty.
+          double error_steer = 0.0;
+          double desired_yaw = 0.0;
+          if (!x_points.empty()) {
+            desired_yaw = angle_between_points(
+                x_position,
+                y_position,
+                x_points[idx_target_point],
+                y_points[idx_target_point]
+            );
+            error_steer = normalize_angle(desired_yaw - yaw);
+          }
+
+          {
+            auto distance_from_ego = [&](std::size_t idx) {
+              if (idx >= x_points.size()) {
+                return 0.0;
+              }
+              const double dx = x_points[idx] - x_position;
+              const double dy = y_points[idx] - y_position;
+              return std::sqrt(dx * dx + dy * dy);
+            };
+            std::ofstream file_debug("steer_debug.log",
+                                     std::ofstream::out | std::ofstream::app);
+            file_debug << i
+                       << " " << x_points.size()
+                       << " " << idx_closest_point
+                       << " " << idx_target_point
+                       << " " << distance_from_ego(idx_closest_point)
+                       << " " << distance_from_ego(idx_target_point)
+                       << " " << (x_points.empty() ? 0.0
+                                                   : distance_from_ego(x_points.size() - 1))
+                       << " " << yaw
+                       << " " << desired_yaw
+                       << " " << error_steer << endl;
+          }
           
 
           /**

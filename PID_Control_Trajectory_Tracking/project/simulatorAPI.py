@@ -245,8 +245,13 @@ class World(object):
 #             previous_index = index
 
         # increase wait time for debug
-        wait_time = 0.0
+        # The waypoint cursor below advances by delta_t worth of planned travel
+        # every call, but this is called once per rendered frame. Gating on
+        # wait_time == delta_t keeps the trajectory advancing at real time; with
+        # wait_time == 0 it advances at (frame rate * delta_t), so at 60 FPS the
+        # reference runs away from the car at about three times its speed.
         delta_t = 0.05
+        wait_time = delta_t
         if (sim_time - last_move_time) > wait_time:
             last_move_time = sim_time
             # move car using interpolation based on the velocity label form trajectory points
