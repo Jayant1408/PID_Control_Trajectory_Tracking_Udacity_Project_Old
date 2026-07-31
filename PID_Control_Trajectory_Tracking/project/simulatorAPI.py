@@ -863,7 +863,14 @@ def game_loop(args):
                 location_y = t.location.y
                 location_z = t.location.z
 
-                ws.send(json.dumps({'traj_x': x_points, 'traj_y': y_points, 'traj_v': v_points ,'yaw': _prev_yaw, "velocity": velocity, 'time': sim_time, 'waypoint_x': waypoint_x, 'waypoint_y': waypoint_y, 'waypoint_t': waypoint_t, 'waypoint_j': waypoint_j, 'tl_state': _tl_state, 'obst_x': obst_x, 'obst_y': obst_y, 'location_x': location_x, 'location_y': location_y, 'location_z': location_z } ))
+                # 'yaw' is the planned path's heading at the trajectory cursor,
+                # not the car's. That was equivalent while the car was teleported
+                # onto way_points[0], but this build drives it with apply_control,
+                # so the two diverge and the steering loop has no heading
+                # feedback. 'yaw_vehicle' is the measured heading.
+                yaw_vehicle = t.rotation.yaw * math.pi / 180
+
+                ws.send(json.dumps({'traj_x': x_points, 'traj_y': y_points, 'traj_v': v_points ,'yaw': _prev_yaw, 'yaw_vehicle': yaw_vehicle, "velocity": velocity, 'time': sim_time, 'waypoint_x': waypoint_x, 'waypoint_y': waypoint_y, 'waypoint_t': waypoint_t, 'waypoint_j': waypoint_j, 'tl_state': _tl_state, 'obst_x': obst_x, 'obst_y': obst_y, 'location_x': location_x, 'location_y': location_y, 'location_z': location_z } ))
 
             clock.tick_busy_loop(60)
             world.tick(clock)

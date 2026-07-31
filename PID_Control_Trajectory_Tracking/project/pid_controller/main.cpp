@@ -255,7 +255,8 @@ int main ()
   fstream file_debug;
   file_debug.open("steer_debug.log", std::ofstream::out | std::ofstream::trunc);
   file_debug << "i n_points idx_closest idx_target dist_closest dist_target "
-                "dist_last yaw desired_yaw error_steer" << endl;
+                "dist_last yaw_vehicle yaw_path desired_yaw error_steer "
+                "steer_output velocity target_speed throttle" << endl;
   file_debug.close();
 
   // Timer for computing the PID update period (delta time), as in the starter.
@@ -317,7 +318,11 @@ int main ()
           vector<double> x_points = data["traj_x"];
           vector<double> y_points = data["traj_y"];
           vector<double> v_points = data["traj_v"];
-          double yaw = data["yaw"];
+          // data["yaw"] is the planned path's heading at the trajectory cursor,
+          // not the vehicle's. Steering needs the measured heading.
+          double yaw_path = data["yaw"];
+          double yaw_vehicle = data["yaw_vehicle"];
+          double yaw = normalize_angle(yaw_vehicle);
           double velocity = data["velocity"];
           double sim_time = data["time"];
           double waypoint_x = data["waypoint_x"];
@@ -346,7 +351,9 @@ int main ()
           vector< vector<double> > spirals_v;
           vector<int> best_spirals;
 
-          path_planner(x_points, y_points, v_points, yaw, velocity, goal, is_junction, tl_state, spirals_x, spirals_y, spirals_v, best_spirals);
+          // Left on the path heading so this change is isolated to the steering
+          // loop; the planner only uses it as a fallback below 0.01 m/s.
+          path_planner(x_points, y_points, v_points, yaw_path, velocity, goal, is_junction, tl_state, spirals_x, spirals_y, spirals_v, best_spirals);
 
           // Compute the delta time between successive controller updates.
           time(&timer);
@@ -406,29 +413,6 @@ int main ()
             error_steer = normalize_angle(desired_yaw - yaw);
           }
 
-          {
-            auto distance_from_ego = [&](std::size_t idx) {
-              if (idx >= x_points.size()) {
-                return 0.0;
-              }
-              const double dx = x_points[idx] - x_position;
-              const double dy = y_points[idx] - y_position;
-              return std::sqrt(dx * dx + dy * dy);
-            };
-            std::ofstream file_debug("steer_debug.log",
-                                     std::ofstream::out | std::ofstream::app);
-            file_debug << i
-                       << " " << x_points.size()
-                       << " " << idx_closest_point
-                       << " " << idx_target_point
-                       << " " << distance_from_ego(idx_closest_point)
-                       << " " << distance_from_ego(idx_target_point)
-                       << " " << (x_points.empty() ? 0.0
-                                                   : distance_from_ego(x_points.size() - 1))
-                       << " " << yaw
-                       << " " << desired_yaw
-                       << " " << error_steer << endl;
-          }
           
 
           /**
@@ -499,6 +483,35 @@ int main ()
           } else {
             throttle_output = 0;
             brake_output = -throttle;
+          }
+
+          {
+            auto distance_from_ego = [&](std::size_t idx) {
+              if (idx >= x_points.size()) {
+                return 0.0;
+              }
+              const double dx = x_points[idx] - x_position;
+              const double dy = y_points[idx] - y_position;
+              return std::sqrt(dx * dx + dy * dy);
+            };
+            std::ofstream file_debug("steer_debug.log",
+                                     std::ofstream::out | std::ofstream::app);
+            file_debug << i
+                       << " " << x_points.size()
+                       << " " << idx_closest_point
+                       << " " << idx_target_point
+                       << " " << distance_from_ego(idx_closest_point)
+                       << " " << distance_from_ego(idx_target_point)
+                       << " " << (x_points.empty() ? 0.0
+                                                   : distance_from_ego(x_points.size() - 1))
+                       << " " << yaw
+                       << " " << yaw_path
+                       << " " << desired_yaw
+                       << " " << error_steer
+                       << " " << steer_output
+                       << " " << velocity
+                       << " " << target_speed
+                       << " " << throttle_output << endl;
           }
 
           // Save data
