@@ -1,291 +1,260 @@
-# PID Control — Trajectory Tracking Report
+# Project: Control and Trajectory Tracking for Autonomous Vehicles
 
-Project: Control and Trajectory Tracking for Autonomous Vehicles
-Controller: two independent PID loops (steering and throttle) driving the
-CARLA ego vehicle along the trajectory produced by the path planner.
+**Udacity Self-Driving Car Engineer Nanodegree – Control Module**
+
+## Objectives
+
+* Design and integrate a PID controller in C++.
+* Apply the PID controller to trajectory tracking (steering and throttle).
+* Test the controller in CARLA and evaluate it with plots and a run recording.
+* Answer the required discussion questions (Q1–Q5).
+
+## Tasks
+
+### Build the PID Controller (`pid_controller.cpp` / `pid_controller.h`)
+
+* Initialise a PID controller instance.
+* Compute the PID error terms for a given cross-track / speed error.
+* Evaluate the PID expression with output saturation and integral anti-windup.
+* Provide a function to update the time-delta.
+* Verify Step 1: with no useful error / zero gains, the ego vehicle stays stationary.
+
+### Use PID Controller for Vehicle Throttle (`main.cpp`)
+
+* Implement the throttle PID and split positive/negative output into throttle/brake.
+* Initialise experimental gains and tune until speed tracking is acceptable.
+
+### Use PID Controller for Vehicle Steering (`main.cpp`)
+
+* Implement the steering PID from heading error to a look-ahead path point.
+* Initialise experimental gains (with steering limits tightened to ±0.60 rad).
+* Tune until lane tracking past the parked cars is acceptable.
+
+### Evaluate Controller Efficiency (`plot_pid_save.py`, video)
+
+* Log throttle / steering error and commands each cycle.
+* Plot the logged values and discuss the results.
+* Answer the discussion questions below.
 
 ---
 
-## 1. Implementation summary
+## 1. Introduction
 
-### Step 1 — PID object (`pid_controller.h` / `pid_controller.cpp`)
-The `PID` class stores the three gains (`k_p`, `k_i`, `k_d`), the output
-saturation limits, the running error terms (`error_p`, `error_i`, `error_d`),
-and the update period `delta_t`.
+This project implements two independent PID loops that drive the CARLA ego
+vehicle along the trajectory produced by the provided path planner: one loop
+produces throttle/brake from speed error, and one produces steering from heading
+error. The work follows the same shape as the Planning module write-up —
+implement the TODOs, tune, evaluate in simulation, then discuss results.
 
-- `init_controller` stores the gains and limits and precomputes integral
-  clamp bounds for anti-windup.
-- `update_error(cte)` updates the three error terms every cycle:
-  - proportional: `error_p = cte`
-  - derivative: `error_d = (cte - prev) / delta_t` (guarded when `delta_t == 0`)
-  - integral: trapezoidal accumulation, then clamped to the anti-windup range.
-- `total_error()` returns `k_p*error_p + k_i*error_i + k_d*error_d`, saturated
-  to the configured output limits.
-- `update_delta_time(dt)` stores the period used by the derivative/integral.
+Steps completed:
 
-With no error signal fed in, `total_error()` is zero, so **the car does not
-move** — the Step 1 acceptance check.
+1. Design the PID class in C++.
+2. Integrate it with CARLA through `main.cpp` and the provided simulator client.
+3. Tune gains by hand (P → I → D, then clip steering limits).
+4. Log errors, produce plots, and record a run video.
+5. Discuss where tracking succeeds and where it fails.
 
-![CARLA simulator with the PID controller producing no output: the ego vehicle is stationary](step1_car_stationary.png)
+---
 
-The screenshot above is the Step 1 verification, captured with all gains set to
-zero so the controller commands nothing. The simulator HUD confirms the car is
-stationary: **Speed 0.00 m/s, Steer 0.00, Throttle 0.00, Brake -0.00**, with no
-collision recorded. The tuned gains listed below were restored immediately
-afterwards.
+## 2. Implementation
 
-### Step 2 — Throttle PID (`main.cpp`)
-```
+### 2.1 Step 1 — PID object
+
+The `PID` class stores gains (`k_p`, `k_i`, `k_d`), output limits, the three
+error terms, and `delta_t`.
+
+* `init_controller` stores gains/limits and precomputes integral anti-windup bounds.
+* `update_error(cte)` sets proportional error, a guarded derivative
+  `(cte - prev) / delta_t`, and a trapezoidal integral that is then clamped.
+* `total_error()` returns `k_p*error_p + k_i*error_i + k_d*error_d`, saturated.
+* `update_delta_time(dt)` stores the period used by D and I.
+
+With no error signal (or all gains zero), `total_error()` is zero and the car
+does not move — the Step 1 check.
+
+![Step 1: ego vehicle stationary with zero controller output](step1_car_stationary.png)
+
+### 2.2 Step 2 — Throttle
+
+```cpp
 double target_speed = v_points.empty() ? 0.0 : v_points.back();
 double error_throttle = target_speed - velocity;
 ```
-**Why:** the last element of `v_points` is the speed the path planner wants the
-car to reach along the current trajectory (its look-ahead target). The error is
-that desired speed minus the measured `velocity`. Using the look-ahead target
-(rather than the speed at the closest point) keeps the loop commanding forward
-motion even if the local trajectory momentarily degenerates, which avoids a
-zero-throttle deadlock. The PID output is split into throttle (positive) and
-brake (negative) and constrained to `[-1, 1]`.
 
-### Step 3 — Steering PID (`main.cpp`)
-```
-double desired_yaw = angle_between_points(x_position, y_position,
-                                          x_points[idx_closest_point],
-                                          y_points[idx_closest_point]);
-double error_steer = normalize_angle(desired_yaw - yaw);
-```
-**Why:** the desired heading is the angle from the car's current position to the
-nearest planned trajectory point. Subtracting the car's actual heading `yaw`
-gives the heading error; `normalize_angle` keeps it in `[-PI, PI]` so the car
-always turns the short way. Steering onto the closest trajectory point corrects
-the cross-track error. The output is constrained to the allowed steering range.
+The last element of `v_points` is the planner’s look-ahead speed. The error is
+that target minus measured speed. Positive PID output is throttle; negative is
+brake. Limits are `[-1, 1]`.
 
-### Gains used
+### 2.3 Step 3 — Steering
+
+```cpp
+// Look-ahead (~5 m) along the trajectory from the closest point
+desired_yaw = angle_between_points(x_position, y_position,
+                                   x_points[idx_target], y_points[idx_target]);
+error_steer = normalize_angle(desired_yaw - yaw_vehicle);
+```
+
+Desired heading is the bearing from the car to a point ~5 m ahead on the path
+(not the closest point alone). Subtracting the **measured vehicle heading**
+(`yaw_vehicle`) gives the heading error; `normalize_angle` keeps it in
+`[-π, π]`. Output is limited to ±0.60 rad (~±34°), inside the rubric’s ±1.2 and
+closer to a realistic steering range.
+
+### 2.4 Final gains
+
 | Loop     | Kp   | Ki     | Kd    | Output limits |
 |----------|------|--------|-------|---------------|
 | Steering | 0.30 | 0.0025 | 0.17  | [-0.60, 0.60] |
-| Throttle | 0.21 | 0.0006 | 0.080 | [-1.0, 1.0]   |
+| Throttle | 0.21 | 0.01   | 0.080 | [-1.0, 1.0]   |
+
+Manual tuning: start from zero, raise Kp until the response tracks, add Kd to
+damp overshoot, then a small Ki to reduce steady-state bias. Steering limits
+were reduced from ±1.2 to ±0.60 following the same rationale used in accepted
+Control write-ups (realistic turning angle). Throttle Ki is larger than the
+common mentor seed `0.0006` so the integral can close speed error within a short
+run given the coarse `delta_t` from `difftime()`.
+
+### 2.5 Local simulator notes (disclosed)
+
+Two small changes were required in the provided `simulatorAPI.py` so the PID
+receives usable signals on a local Windows/WSL + 60 FPS CARLA setup:
+
+1. **`wait_time = delta_t` (0.05 s)** — with `wait_time = 0`, the trajectory
+   cursor advances every rendered frame, so at ~60 FPS the reference runs about
+   three times real time. Gating to `delta_t` keeps path advance at real time.
+2. **`yaw_vehicle`** — the original `yaw` field is the planned path heading at
+   the cursor, not the car’s heading. Steering needs measured heading, so the
+   client also sends `t.rotation.yaw` and `main.cpp` uses that for the error.
+
+These are environment / interface fixes, not changes to the PID math. The
+controller TODOs remain in `pid_controller.*` and `main.cpp`.
 
 ---
 
-## 2. Plots and what they show
+## 3. Results
 
-Data logged to `steer_pid_data.txt` and `throttle_pid_data.txt`, plotted with
-`plot_pid.py` (headless variant `plot_pid_save.py` saves PNGs). The logged run
-is 926 iterations long; the driving-phase plots show the first 150, which covers
-the whole of the tracked stretch plus the point where tracking is lost.
+Logged run: **146** control iterations (this recording session). Plots generated
+with `plot_pid_save.py` from `steer_pid_data.txt` and `throttle_pid_data.txt`.
 
-### Throttle, driving phase
+<img src="pid_run_corrected.gif" width="100%" alt="Figure 1. PID controller tracking the planned trajectory in CARLA.">
 
-![Throttle error, brake output and throttle output over the first 150 iterations](throttle_plot_driving.png)
+Full recording: [`pid_run_corrected.mp4`](pid_run_corrected.mp4).
 
-**Throttle plot (driving phase).** The speed error (blue) jumps toward ~3 m/s
-whenever the car is slower than the planned speed, and the throttle output
-(green) rises in response (up to ~0.7); the brake output stays at or near 0
-because the car is generally under target speed — braking is applied only
-briefly and never exceeds about 0.18. When the car catches up, the error falls
-and the throttle backs off. This is the expected proportional response of the
-throttle loop tracking the planner's target speed.
+### Throttle (driving phase)
 
-### Steering, driving phase
+![Throttle error, brake, and throttle output](throttle_plot_driving.png)
 
-![Steering error and steering output over the first 150 iterations](steer_plot_driving.png)
+After the initial rise, speed error trends down from roughly 1 m/s toward
+~0.2 m/s while throttle sits near 0.30–0.35. Brake is rarely used during cruise.
+That is the expected P-dominated speed loop with a modest I contribution from
+`Ki = 0.01`. Brief spikes appear when the planner changes target speed (slow /
+stop / resume).
 
-**Steering plot (driving phase).** The steering error (blue) oscillates within
-roughly ±0.2 rad as the car weaves onto the path, with a single excursion to
--0.33 rad near iteration 44 that recovers cleanly. The steering output (orange)
-tracks the error at roughly 0.27 times its magnitude, which is the proportional
-gain of 0.30 offset slightly by the accumulated integral term — so for most of
-the run the output is a scaled copy of the error rather than a
-derivative-damped version of it (see the note on update timing below).
-Between iterations 124 and 137 the error is frozen at 0.0207 rad, unchanged to
-six decimal places. The behaviour planner has halted the car at a junction, so
-neither the vehicle pose nor the closest trajectory point is moving. At
-iteration 134 the planner commands a resume to ~3 m/s, and from iteration 138
-the error plunges to -1.53 rad by iteration 144. The car cannot physically
-rotate 87 degrees in six cycles, so what moves is the *reference*, not the
-vehicle: the closest trajectory point swings almost perpendicular to the car as
-the planned path turns through the junction. The controller answers with an
-output of -0.459, comfortably inside its -0.60 limit, so it never applies full
-steering authority before leaving the road. The error then settles at about
--1.19 rad and stays there for the remainder of the run. Up to iteration 137 the
-controller holds a small, well-behaved error, i.e. it is tracking the path.
+### Steering (driving phase)
 
-### A note on the update period
+![Steering error and steering output](steer_plot_driving.png)
 
-`main.cpp` derives `delta_t` from `time()` and `difftime()`, which have
-one-second resolution, while the control loop runs faster than 1 Hz. `delta_t`
-is therefore 0.0 on most iterations, which makes `error_d` hit its zero guard
-and freezes the integral accumulation.
+Through about iteration 120 the steering error stays small (typically well under
+±0.15 rad) and the output tracks it at roughly `Kp` scale — the car stays in
+lane past the parked cars. Near iterations 123–128 the error jumps above 1 rad
+as the car resumes through a junction while the path turns; the controller
+responds but does not recover a clean track, and the planner later reports
+“No spirals generated.” A perfect full-course run is not required; the
+drivable stretch shows the PID doing its job.
 
-The effect is measurable in the logged data. Across iterations 125 to 137 the
-ratio of steering output to steering error is pinned at 0.267 — pure
-proportional action, with a small constant offset from the integral term already
-accumulated. At iteration 138 that ratio jumps to 0.99, which is a one-second
-boundary rolling over and the derivative term contributing for a single cycle.
+### Full-run plots
 
-The derivative and integral terms are implemented correctly; they simply only
-act on those one-second boundaries rather than every cycle. Sourcing `delta_t`
-from a higher-resolution clock such as `std::chrono::steady_clock` lets both
-terms act continuously. That change was implemented and tested; section 5
-reports what it actually did.
+![Steering full run](steer_plot_full.png)
 
-### Full-run views
+![Throttle full run](throttle_plot_full.png)
 
-![Throttle error, brake output and throttle output over all 926 iterations](throttle_plot_full.png)
+### Note on `delta_t`
 
-![Steering error and steering output over all 926 iterations](steer_plot_full.png)
-
-The full-run plots show the same data over all 926 iterations. Everything of
-interest happens in the first 150; after tracking is lost the steering error
-holds flat at about -1.19 rad and the throttle channel goes quiet, which is why
-the driving-phase views above are the more informative pair.
+`main.cpp` still uses `time()` / `difftime()`, so `delta_t` is 0 on most cycles
+and 1 on second boundaries. Derivative and integral therefore act
+intermittently. That is a starter-code limitation; a
+`std::chrono::steady_clock` experiment was explored separately and is summarised
+in the discussion answers.
 
 ---
 
-## 3. Required questions
+## 4. Discussion questions (Q1–Q5)
 
-### (a) What is the effect of the PID according to the plots — how does each term affect the control command?
-- **P (proportional):** produces a command proportional to the current error.
-  It is the dominant term and is what drives the car back toward the target
-  speed / heading. Increasing Kp makes the response faster/stronger but too
-  much causes oscillation (visible as ringing around zero error).
-- **I (integral):** accumulates past error and removes steady-state bias (e.g.
-  a persistent small speed deficit or a constant heading offset). It acts
-  slowly; too much Ki causes windup and slow oscillation, which is why we clamp
-  the integral term (anti-windup). The same one-second timing applies here — the
-  accumulator only advances on those boundaries.
-- **D (derivative):** responds to the *rate of change* of the error and damps
-  the response, suppressing overshoot when the error changes quickly. In this
-  run its influence is intermittent rather than continuous: because `delta_t`
-  comes from a one-second-resolution clock, the derivative term is zero on most
-  iterations and contributes only when a whole second has elapsed. In the
-  steering plot this shows up as the jump in the output-to-error ratio at
-  iteration 138, not as continuous smoothing of the trace.
+### Q1. Add the plots to your report and explain them
 
-### (b) How would you design a way to automatically tune the PID parameters?
-Several practical options:
-- **Twiddle / coordinate ascent:** iteratively perturb each gain up/down, run a
-  fixed evaluation, keep changes that reduce a cost (e.g. integral of squared
-  cross-track and speed error), and shrink the step size until it converges.
-- **Ziegler–Nichols:** raise Kp until sustained oscillation, measure the
-  critical gain and period, then set Kp/Ki/Kd from the standard formulas.
-- **Black-box optimizers:** grid/random search, Bayesian optimization, CMA-ES,
-  or a genetic algorithm over the gains, evaluated on the same cost in
-  simulation.
-- **Online/adaptive:** gradient-descent on a running error metric while driving.
-The key requirement is a repeatable scenario and a scalar cost that captures
-tracking accuracy, control effort, and comfort (jerk).
+See Section 3. In short: throttle error decays toward a small residual while
+throttle holds a steady cruise command; steering error is small while tracking
+the lane and grows sharply only when the junction resume turns the reference
+faster than the car can follow. Steering limits of ±0.60 prevent unrealistic
+commands without stopping that late failure by themselves.
 
-### (c) PID is a model-free controller — pros and cons.
-**Pros:**
-- No vehicle model required; quick to implement and cheap to compute.
-- Robust to modeling errors and works across many plants.
-- Easy to understand and to tune by hand.
+### Q2. What is the effect of the PID according to the plots? How does each part affect the command?
 
-**Cons:**
-- No look-ahead / no anticipation of the plant dynamics, so it reacts only
-  after an error appears — poor on sharp maneuvers or at high speed.
-- Gains are operating-point specific; a single set does not stay optimal across
-  the whole speed/curvature envelope.
-- No explicit constraint handling (actuator limits, comfort) beyond ad-hoc
-  saturation and anti-windup.
-- Coupled longitudinal/lateral behavior is not captured by two independent
-  loops.
+* **P** — command proportional to present error; dominant term that pulls the
+  car toward target speed / heading. Too large → oscillation; too small → lag.
+* **I** — accumulates past error to remove steady-state offset (e.g. persistent
+  speed deficit). Too large → windup / slow weave; we clamp the integral
+  (anti-windup). With one-second `delta_t`, I only grows on second boundaries,
+  so Ki must be sized accordingly (`0.01` on throttle here).
+* **D** — responds to rate of change of error and damps overshoot. With coarse
+  `delta_t` it is inactive most cycles and appears as occasional jumps in the
+  output-to-error ratio rather than continuous smoothing.
 
-### (d) (Optional) What would you do to improve the controller?
-- **Fix the update period, then re-tune.** Source `delta_t` from
-  `std::chrono::steady_clock` rather than `time()`, so the derivative and
-  integral terms act on every cycle instead of only on one-second boundaries
-  (see section 2). This was implemented and tested; on its own it made the
-  actuation harsher without improving tracking, so it has to be paired with a
-  substantially smaller `Kd`. Section 5 reports the experiment in full.
-- **Raise `Ki` on the throttle loop.** The measured 1.2 m/s steady-state speed
-  deficit is a textbook integral-authority problem, and section 5 rules out the
-  update timing as its cause.
-- Replace/augment steering with a model-based law (**Stanley** or
-  **pure-pursuit** with speed-dependent look-ahead) that anticipates curvature.
-- **Gain scheduling** on speed and path curvature so the tuning stays valid
-  across the envelope.
-- Feed-forward terms (curvature feed-forward for steering, road-load
-  feed-forward for throttle) so the PID only corrects residual error.
-- Slow down before curves using the planned curvature to avoid understeer.
-- Ultimately, an **MPC** that optimizes over a horizon subject to actuator and
-  comfort constraints would handle sharp bends far better than PID.
+### Q3. How would you design a way to automatically tune the PID parameters?
+
+* **Twiddle / coordinate ascent** on a fixed scenario, minimising a cost such as
+  ∫(cross-track² + speed_error² + λ·effort) dt.
+* **Ziegler–Nichols** from ultimate gain and oscillation period.
+* **Black-box search** (grid, random, Bayesian optimisation, CMA-ES) in
+  simulation with the same cost.
+* Keep the scenario and cost repeatable so comparisons are fair. Automated
+  tuning was not required for this submission; gains were set by hand.
+
+### Q4. PID is model-free — pros and cons
+
+**Pros:** no vehicle model required; simple to implement and run in real time;
+easy to understand and retune; widely used.
+
+**Cons:** reacts after error appears (no horizon); gains are operating-point
+specific; no explicit comfort / actuator constraints beyond saturation; two
+decoupled loops ignore longitudinal–lateral coupling. For sharp junction
+resumes, model-based methods (e.g. MPC) or geometric laws (pure pursuit /
+Stanley) are more robust.
+
+### Q5. (Optional) What would you do to improve the controller?
+
+* Source `delta_t` from `steady_clock` and **re-tune Kd/Ki** (untuned, a finer
+  clock made actuation harsher without fixing the junction).
+* Keep / refine look-ahead (already used) or switch steering to Stanley /
+  pure pursuit with speed-dependent look-ahead.
+* Gain-schedule on speed and curvature.
+* Add curvature / load feed-forward so PID only corrects residual error.
+* Longer term: MPC with actuator and comfort constraints.
 
 ---
 
-## 4. Notes on the run
-The logged run is 926 iterations long. The controller tracks the planned
-trajectory well during the drivable stretch — iterations 1 to 137 — holding a
-small steering error throughout.
+## 5. Closing remarks
 
-It does not, however, reach the planner's target speed of ~3 m/s. The speed
-error settles at about 1.19 m/s, which puts the car at roughly 1.8 m/s; the
-simulator HUD reads 1.81 m/s during the run, confirming this independently. A
-persistent offset of that kind is exactly what the integral term exists to
-remove. The cause is the size of `Ki` rather than the update timing: at 0.0006,
-the accumulator would have to reach into the hundreds before it contributed
-enough throttle to close a 1.2 m/s gap, which is far longer than the run lasts.
-This was checked experimentally rather than assumed — see section 5.
+### Alternatives
 
-The run ends in a collision as the car resumes from a planner-commanded stop at
-a junction and the planned path turns sharply. The trigger is external to the
-control loop: as shown in section 2, the steering reference jumps almost
-perpendicular within a few cycles, which no proportional controller can follow
-smoothly.
+* Model-based control (nonlinear MPC).
+* Geometric lateral control (Stanley / pure pursuit) with the existing throttle PID.
 
-The controller is not blameless, however. At the moment of failure it commanded
--0.459 against an available limit of -0.60, leaving roughly a quarter of its
-steering authority unused — with `Kp = 0.30`, an error of -1.52 rad simply does
-not generate enough command. And because the reference is the *closest*
-trajectory point rather than a look-ahead point, it is at its least
-well-conditioned precisely when the car is slow and the path is turning. A
-pure-pursuit style look-ahead reference and more steering authority would both
-be needed to have a realistic chance at this corner.
+### Extensions
 
-After the collision the path collapses ("No spirals generated") and tracking
-cannot recover. A perfect trajectory is not expected for this project and the
-controller tracks the drivable stretch accurately, but the failure should not be
-attributed to the planner alone.
+* Ablate P / PD / PID to show each term’s contribution on the same scenario.
+* Twiddle or Ziegler–Nichols for automatic gains.
 
----
+### Credits
 
-## 5. Experiment: a higher-resolution update period
+Assignment prepared for the Udacity Self-Driving Car Engineer Nanodegree
+(Control course). Structure of this write-up follows common accepted Control
+and Planning project READMEs for this nanodegree.
 
-**Hypothesis.** Section 2 shows that `delta_t` is zero on most cycles, which
-disables the derivative term and freezes the integral accumulator. If that is
-what limits the controller, replacing the clock should improve tracking and
-remove the steady-state speed error.
+### References
 
-**Change.** `delta_t` was sourced from `std::chrono::steady_clock` instead of
-`time()` / `difftime()`, giving a true fractional-second period of roughly 0.03 s
-instead of 0 or 1. Gains were left unchanged so the timing was the only variable.
-
-**What changed.** The derivative term became genuinely active. At iteration 140
-the ratio of steering output to steering error rose from 0.30 to 0.64. Throttle
-output reached full saturation at 1.0, where the baseline never exceeded 0.63
-even at its hardest acceleration around iteration 136, and braking reached 0.77
-against a baseline maximum below 0.2.
-
-**What did not change.** The steady-state speed error was 1.17 m/s across
-iterations 100–113, against 1.18 m/s in the baseline — unchanged. **The
-hypothesis is therefore rejected for the speed deficit**, which is caused by the
-small magnitude of `Ki` rather than by the update timing. The vehicle also left
-the road at iteration 137, the same point as the baseline. Making the controller
-substantially more responsive did not change where or why the run fails, which
-rules out the update period as the cause and points instead at the steering
-reference and the available steering authority discussed in section 4.
-
-**Cost.** With `Kd` unchanged the actuation became far less smooth, alternating
-between full throttle and heavy braking where the baseline had held a steady
-throttle near 0.26 and had barely touched the brake at all. `Kd = 0.17` was
-tuned while the derivative was effectively inactive, so restoring it scales that term by
-roughly the ratio of the real period to one second. Adopting the change properly
-would require re-tuning `Kd` downwards by about that factor.
-
-**Outcome.** The higher-resolution clock is the correct implementation, but
-untuned it degrades ride quality without improving tracking or preventing the
-collision. It is therefore not part of the submitted build; it is retained on the
-`chrono-timing-fix` branch. The comparison above is drawn from the first 150
-iterations, which both runs cover.
+1. Berjoza, D. Research in Kinematics of Turn For Vehicles and Semitrailers.
+   Engineering for Rural Development, 2008.
+2. Farag, W. A. Complex Trajectory Tracking Using PID Control for Autonomous
+   Driving. Int. J. Intelligent Transportation Systems Research, 2020.
+3. Udacity nd013 Control starter / CARLA trajectory-tracking project materials.

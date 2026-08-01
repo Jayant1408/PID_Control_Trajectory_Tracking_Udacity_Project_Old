@@ -45,21 +45,23 @@ def plot_reference_distance(df):
 
 
 def plot_yaw_sources(df):
+    # Prefer the derived heading (clean route); fall back to the old harness field.
+    yaw_col = "yaw_estimate" if "yaw_estimate" in df.columns else "yaw_vehicle"
     fig, (ax_top, ax_bot) = plt.subplots(2, 1, sharex=True,
                                          figsize=(7.0, 6.0))
-    ax_top.plot(df["i"], df["yaw_vehicle"], label="yaw_vehicle (measured)")
-    ax_top.plot(df["i"], df["yaw_path"], label="yaw_path (planned, used before)",
+    ax_top.plot(df["i"], df[yaw_col], label=f"{yaw_col} (used for steering)")
+    ax_top.plot(df["i"], df["yaw_path"], label="yaw_path (planned)",
                 alpha=0.8)
-    ax_top.set_title("Heading signal: measured vehicle yaw vs planned path yaw")
+    ax_top.set_title("Heading signal: steering yaw vs planned path yaw")
     ax_top.set_ylabel("Yaw (rad)")
     ax_top.legend()
     ax_top.grid(True, alpha=0.3)
 
-    ax_bot.plot(df["i"], df["yaw_path"] - df["yaw_vehicle"], color="crimson")
+    ax_bot.plot(df["i"], df["yaw_path"] - df[yaw_col], color="crimson")
     ax_bot.axhline(0.0, color="black", linewidth=0.8)
-    ax_bot.set_title("Error introduced by using the planned heading")
+    ax_bot.set_title("Difference between planned and steering heading")
     ax_bot.set_xlabel("Iteration")
-    ax_bot.set_ylabel("yaw_path - yaw_vehicle (rad)")
+    ax_bot.set_ylabel(f"yaw_path - {yaw_col} (rad)")
     ax_bot.grid(True, alpha=0.3)
     save(fig, "yaw_signal_comparison.png")
 
@@ -79,8 +81,9 @@ def plot_speed_tracking(df):
 
 def report_summary(df):
     """Print the numbers quoted in the report so they stay verifiable."""
-    gap = (df["yaw_path"] - df["yaw_vehicle"]).abs()
-    opposite = ((df["yaw_path"] * df["yaw_vehicle"]) < 0).sum()
+    yaw_col = "yaw_estimate" if "yaw_estimate" in df.columns else "yaw_vehicle"
+    gap = (df["yaw_path"] - df[yaw_col]).abs()
+    opposite = ((df["yaw_path"] * df[yaw_col]) < 0).sum()
     cruise = df[df["target_speed"] > 2.5]
     print("--- summary ---")
     print(f"iterations                     : {len(df)}")
@@ -88,7 +91,7 @@ def report_summary(df):
     print(f"max |error_steer| (rad)        : {df['error_steer'].abs().max():.4f}")
     print(f"max dist_closest (m)           : {df['dist_closest'].max():.2f}")
     print(f"final dist_closest (m)         : {df['dist_closest'].iloc[-1]:.2f}")
-    print(f"max |yaw_path - yaw_vehicle|   : {gap.max():.4f} rad")
+    print(f"max |yaw_path - {yaw_col}|   : {gap.max():.4f} rad")
     print(f"cycles where the two disagree in sign: {opposite} of {len(df)}")
     if not cruise.empty:
         deficit = (cruise["target_speed"] - cruise["velocity"]).mean()
