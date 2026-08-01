@@ -257,7 +257,12 @@ class World(object):
             # move car using interpolation based on the velocity label form trajectory points
             if len(way_points) > 1:
                 yaw = math.atan2(way_points[1].location.y-way_points[0].location.y, way_points[1].location.x-way_points[0].location.x)
-                velocity = v_points[0]
+                # Advance the cursor by how far the car actually travelled, not
+                # by how far the plan wanted it to. Using v_points[0] here lets
+                # the reference and the vehicle drift apart without bound in
+                # whichever direction the tracking error happens to point.
+                _measured_v = self.player.get_velocity()
+                velocity = math.sqrt(_measured_v.x**2 + _measured_v.y**2)
                 if velocity < 0.01 or _active_maneuver == 3:
                     yaw = _prev_yaw
                     way_points.pop(0)

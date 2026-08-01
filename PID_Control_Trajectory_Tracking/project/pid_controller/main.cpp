@@ -254,15 +254,24 @@ int main ()
   // .log is gitignored.
   fstream file_debug;
   file_debug.open("steer_debug.log", std::ofstream::out | std::ofstream::trunc);
-  file_debug << "i n_points idx_closest idx_target dist_closest dist_target "
-                "dist_last yaw_vehicle yaw_path desired_yaw error_steer "
-                "steer_output velocity target_speed throttle" << endl;
+  file_debug << "i n_points ref_mode idx_closest idx_target dist_closest "
+                "dist_target dist_last yaw_vehicle yaw_path desired_yaw "
+                "error_steer steer_output velocity target_speed throttle" << endl;
   file_debug.close();
 
   // Timer for computing the PID update period (delta time), as in the starter.
   time_t prev_timer;
   time_t timer;
   time(&prev_timer);
+
+  // State for recovering the vehicle heading from successive positions. The
+  // simulator's "yaw" field carries the planned path's heading rather than the
+  // car's, so the steering loop has no heading feedback unless we derive it.
+  double prev_x = 0.0;
+  double prev_y = 0.0;
+  bool have_prev_position = false;
+  double yaw_estimate = 0.0;
+  bool have_yaw_estimate = false;
 
 
   // initialize pid steer
@@ -301,7 +310,7 @@ int main ()
   pid_throttle.init_controller(0.21, 0.01, 0.080, 1.0, -1.0);
 
 
-  h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
+  h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i, &prev_x, &prev_y, &have_prev_position, &yaw_estimate, &have_yaw_estimate](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
   {
         auto s = hasData(data);
 
@@ -319,10 +328,8 @@ int main ()
           vector<double> y_points = data["traj_y"];
           vector<double> v_points = data["traj_v"];
           // data["yaw"] is the planned path's heading at the trajectory cursor,
-          // not the vehicle's. Steering needs the measured heading.
+          // not the vehicle's. The vehicle heading is derived below.
           double yaw_path = data["yaw"];
-          double yaw_vehicle = data["yaw_vehicle"];
-          double yaw = normalize_angle(yaw_vehicle);
           double velocity = data["velocity"];
           double sim_time = data["time"];
           double waypoint_x = data["waypoint_x"];
@@ -334,6 +341,29 @@ int main ()
           double x_position = data["location_x"];
           double y_position = data["location_y"];
           double z_position = data["location_z"];
+
+          // The simulator reports the car's position but not its heading, and
+          // steering on the path's heading instead leaves the loop with no
+          // feedback about where the car actually points. Recover the heading
+          // from the displacement between updates: the direction the car moved
+          // is the direction it faces. Short displacements carry no reliable
+          // bearing, so hold the previous estimate, and before the car has
+          // moved at all use the path heading, which is correct at rest.
+          const double min_heading_displacement = 0.02;
+          if (have_prev_position) {
+            const double dx_ego = x_position - prev_x;
+            const double dy_ego = y_position - prev_y;
+            if (std::sqrt(dx_ego * dx_ego + dy_ego * dy_ego)
+                >= min_heading_displacement) {
+              yaw_estimate = std::atan2(dy_ego, dx_ego);
+              have_yaw_estimate = true;
+            }
+          }
+          prev_x = x_position;
+          prev_y = y_position;
+          have_prev_position = true;
+          double yaw = normalize_angle(
+              have_yaw_estimate ? yaw_estimate : yaw_path);
 
           if(!have_obst){
           	vector<double> x_obst = data["obst_x"];
@@ -383,27 +413,30 @@ int main ()
 
           // Steering error: heading from the car's current position toward a
           // look-ahead point on the trajectory, relative to the current heading.
-          // The look-ahead reference matters because the closest point can sit at
-          // effectively zero distance from the car, or behind it, where its
-          // bearing is numerically meaningless and can pin steering at the
-          // saturation limit. Walk forward from the closest point until far
-          // enough away, falling back to the last point on short trajectories.
+          // Walking forward from the closest point keeps the bearing well
+          // conditioned; the closest point itself can sit at effectively zero
+          // distance, where its bearing is noise.
           const double look_ahead_distance = 5.0;
+          const double min_reference_distance = 1.0;
           std::size_t idx_target_point = idx_closest_point;
+          double dist_target_point = 0.0;
           for (std::size_t k = idx_closest_point; k < x_points.size(); ++k) {
             idx_target_point = k;
             const double dx = x_points[k] - x_position;
             const double dy = y_points[k] - y_position;
-            if (std::sqrt(dx * dx + dy * dy) >= look_ahead_distance) {
+            dist_target_point = std::sqrt(dx * dx + dy * dy);
+            if (dist_target_point >= look_ahead_distance) {
               break;
             }
           }
 
-          // The planner returns no trajectory at all on some cycles ("No spirals
-          // generated"), so the points may be empty.
+          // reference_mode records which branch produced the error, so the trace
+          // shows when the primary reference was unusable: 0 = look-ahead
+          // bearing, 1 = path tangent, 2 = no reference available.
+          int reference_mode = 0;
           double error_steer = 0.0;
           double desired_yaw = 0.0;
-          if (!x_points.empty()) {
+          if (!x_points.empty() && dist_target_point >= min_reference_distance) {
             desired_yaw = angle_between_points(
                 x_position,
                 y_position,
@@ -411,6 +444,24 @@ int main ()
                 y_points[idx_target_point]
             );
             error_steer = normalize_angle(desired_yaw - yaw);
+          } else if (x_points.size() >= 2) {
+            // Every remaining point is bunched at the car, so a bearing to any of
+            // them is numerical noise: a point 4 cm away can read as a 180-degree
+            // error and saturate the command. The path's own tangent stays
+            // well defined at any separation, so steer on heading error alone.
+            reference_mode = 1;
+            const std::size_t last = x_points.size() - 1;
+            desired_yaw = angle_between_points(
+                x_points[last - 1],
+                y_points[last - 1],
+                x_points[last],
+                y_points[last]
+            );
+            error_steer = normalize_angle(desired_yaw - yaw);
+          } else {
+            // A single point or none: nothing defines a direction. Hold zero
+            // rather than acting on noise.
+            reference_mode = 2;
           }
 
           
@@ -498,6 +549,7 @@ int main ()
                                      std::ofstream::out | std::ofstream::app);
             file_debug << i
                        << " " << x_points.size()
+                       << " " << reference_mode
                        << " " << idx_closest_point
                        << " " << idx_target_point
                        << " " << distance_from_ego(idx_closest_point)
