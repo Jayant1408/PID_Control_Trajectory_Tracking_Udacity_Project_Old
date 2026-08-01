@@ -1,0 +1,7 @@
+build/
+*:Zone.Identifier
+__pycache__/
+*.pyc
+*.log
+.mplcache/
+.cursor/
